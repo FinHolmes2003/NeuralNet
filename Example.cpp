@@ -19,8 +19,8 @@ int main()
     {
         inputFile >> loadedFile;
         inputFile.close();
-        pair<vector<vector<double>>, vector<vector<vector<double>>>> weightsAndBiases = Network::JsonToVectors(loadedFile);
-        neuralnet = Network::Network(weightsAndBiases.first, weightsAndBiases.second); // create the network with the saved weights
+        auto [biases, weights] = Network::JsonToVectors(loadedFile);
+        neuralnet = Network::Network(biases, weights); // create the network with the saved weights
     }
     else
     {
@@ -28,7 +28,7 @@ int main()
         neuralnet = Network::Network(layerSetup); // creates a randomised network if it couldn't load the file
     }
 
-    vector<pair<vector<double>, vector<double>>> trainingData = { // training data to find XOR results
+    vector<pair<vector<float>, vector<float>>> trainingData = { // training data to find XOR results
         {{0.0, 0.0}, {0.0}},
         {{0.0, 1.0}, {1.0}},
         {{1.0, 0.0}, {1.0}},
@@ -36,7 +36,7 @@ int main()
 
     int epochs = 100000;
     size_t batchSize = trainingData.size();
-    double learningRate = 0.5;
+    float learningRate = 0.5;
 
     neuralnet.Train(trainingData, epochs, batchSize, learningRate); // trains the data on the values listed above
 

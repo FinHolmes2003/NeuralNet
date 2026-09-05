@@ -90,7 +90,7 @@ class MyFrame : public wxFrame
         /// @param labelPath 
         /// @param numSamples if set to 0 it will load all the images in the file
         /// @return array of pairs of the colour value for each pixel and the label as an array of [0-9] where it is only 1.0 on the correct number
-        std::vector<std::pair<std::vector<double>, std::vector<double>>> LoadMnistDataset(
+        std::vector<std::pair<std::vector<float>, std::vector<float>>> LoadMnistDataset(
             const std::string& imagePath = "MNIST_ORG/train-images.idx3-ubyte", 
             const std::string& labelPath = "MNIST_ORG/train-labels.idx1-ubyte", 
             size_t numSamples = 0)
@@ -116,7 +116,7 @@ class MyFrame : public wxFrame
 
             constexpr size_t imageSize = imageWidth * imageHeight; // size of mnist images
 
-            std::vector<std::pair<std::vector<double>, std::vector<double>>> dataset;
+            std::vector<std::pair<std::vector<float>, std::vector<float>>> dataset;
             dataset.reserve(numSamples);
 
             std::vector<unsigned char> pixelBuffer(imageSize);
@@ -130,13 +130,13 @@ class MyFrame : public wxFrame
                 if (imgFile.gcount() < imageSize || lblFile.gcount() < 1) // if there are none left
                     break;
 
-                std::vector<double> inputValues(imageSize);
+                std::vector<float> inputValues(imageSize);
                 for (size_t p = 0; p < imageSize; ++p)
                 {
-                    inputValues[p] = static_cast<double>(pixelBuffer[p]) / 255.0; // normalises the pixel
+                    inputValues[p] = static_cast<float>(pixelBuffer[p]) / 255.0; // normalises the pixel
                 }
 
-                std::vector<double> targetValues(10, 0.0);
+                std::vector<float> targetValues(10, 0.0);
                 if (labelByte < 10)
                 {
                     targetValues[labelByte] = 1.0; // creates the output vector
@@ -155,7 +155,7 @@ class MyFrame : public wxFrame
         /// @param imagePath 
         /// @param labelPath 
         /// @return 
-        bool ReadSingleMnistSample(size_t index, std::vector<double>& outPixels, int& outLabel,
+        bool ReadSingleMnistSample(size_t index, std::vector<float>& outPixels, int& outLabel,
                                    const std::string& imagePath = "MNIST_ORG/train-images.idx3-ubyte", 
                                    const std::string& labelPath = "MNIST_ORG/train-labels.idx1-ubyte")
         {
@@ -181,7 +181,7 @@ class MyFrame : public wxFrame
             outPixels.resize(imageSize);
             for (size_t p = 0; p < imageSize; ++p)
             {
-                outPixels[p] = static_cast<double>(pixelBuffer[p]) / 255.0;
+                outPixels[p] = static_cast<float>(pixelBuffer[p]) / 255.0;
             }
 
             outLabel = static_cast<int>(labelByte);
@@ -192,7 +192,7 @@ class MyFrame : public wxFrame
         /// @param normalizedPixels vector or pixels normalized between 0.0 and 1.0
         /// @param width width of the image
         /// @param height height of the image
-        void DisplayGrayscaleImage(const std::vector<double>& normalizedPixels, int width, int height)
+        void DisplayGrayscaleImage(const std::vector<float>& normalizedPixels, int width, int height)
         {
             unsigned char* rgbData = (unsigned char*)malloc(width * height * 3);
 
@@ -233,14 +233,17 @@ class MyFrame : public wxFrame
         void OnLoad(wxCommandEvent& event)
         {
             std::ifstream inputFile("Weights/MNIST.json");
-            json loadedFile;
-            
+    
             if (inputFile.is_open())
             {
+                nlohmann::json loadedFile;
                 inputFile >> loadedFile;
                 inputFile.close();
-                std::pair<std::vector<std::vector<double>>, std::vector<std::vector<std::vector<double>>>> weightsAndBiases = Network::JsonToVectors(loadedFile);
-                neuralNet = Network::Network(weightsAndBiases.first, weightsAndBiases.second);
+
+                auto [biases, weights] = Network::JsonToVectors(loadedFile);
+
+                neuralNet = Network::Network(biases, weights);
+
                 SetStatusText("Successfully loaded weights and biases.");
             }
             else
@@ -261,11 +264,10 @@ class MyFrame : public wxFrame
 
             int epochs = 5;
             size_t batchSize = 120;
-            double learningRate = 5.0;
-
+            float learningRate = 5.0;
 
             neuralNet.Train(testData, epochs, batchSize, learningRate, 
-                [this](int currentEpoch, int totalEpochs, int currentBatch, int totalBatches, int trainingSample, int trainingSampleTotal, double loss) 
+                [this](int currentEpoch, int totalEpochs, int currentBatch, int totalBatches, int trainingSample, int trainingSampleTotal, float loss) 
                 {
                     SetStatusText(wxString::Format("Training... Epoch %d / %d | Batch %d / %d | Image %d / %d | Loss: %.2f", 
                                                 currentEpoch, totalEpochs, currentBatch, totalBatches, trainingSample, trainingSampleTotal , loss));
@@ -287,7 +289,7 @@ class MyFrame : public wxFrame
 
             m_currentImageIndex = dist(gen);
 
-            std::vector<double> inputPixels;
+            std::vector<float> inputPixels;
             int label = -1;
 
             // Direct binary seek for instantaneous lookup
@@ -297,9 +299,9 @@ class MyFrame : public wxFrame
                 return;
             }
 
-            std::vector<double> networkGuess = neuralNet.ForwardPass(inputPixels); // finds the neural network's guess for the image
+            std::vector<float> networkGuess = neuralNet.ForwardPass(inputPixels); // finds the neural network's guess for the image
             int netGuess = std::distance(networkGuess.begin(), std::max_element(networkGuess.begin(), networkGuess.end()));
-            double certainty = networkGuess[netGuess] * 100.0;
+            float certainty = networkGuess[netGuess] * 100.0;
 
             DisplayGrayscaleImage(inputPixels, imageWidth, imageHeight);
             SetStatusText(wxString::Format("Loaded MNIST Sample #%d | Label: %d | Network Guess: %d with %.2f%% certainty", 

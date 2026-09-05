@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <nlohmann/json.hpp>
+#include <sstream>
 
 namespace Network
 {
@@ -14,35 +15,46 @@ namespace Network
     using std::vector;
     using std::pair;
     using std::string;
-    using std::to_string;
     using std::function;
     using std::invalid_argument;
 
-    double Softsign(double inputValue) // Essentially sigmoid but faster
+    float Softsign(const float inputValue) // Essentially sigmoid but faster
     {
-        return inputValue / (1.0 + abs(inputValue));
+        return inputValue / (1.0f + abs(inputValue));
     }
 
-    double InverseSoftsign(double inputValue)
+    float InverseSoftsign(const float inputValue)
     {
-        double denom = 1.0 + abs(inputValue);
-        return 1.0 / (denom * denom);
+        float denom = 1.0f + abs(inputValue);
+        return 1.0f / (denom * denom);
     }
 
     /// @brief Converts the json file into a pair of each layers's weights and biases
     /// @param weightsFile json object of the weights and biases file
     /// @return Layer's weights and biases
-    pair<vector<vector<double>>, vector<vector<vector<double>>>> JsonToVectors(const json& weightsFile)
+    pair<vector<vector<float>>, vector<vector<float>>> JsonToVectors(const json& weightsFile)
     {
         size_t numLayers = weightsFile["Layers"].size();
 
-        vector<vector<double>> biases(numLayers);
-        vector<vector<vector<double>>> weights(numLayers);
+        vector<vector<float>> biases(numLayers);
+        vector<vector<float>> weights(numLayers);
 
         for (size_t i = 0; i < numLayers; i++)
         {
-            biases[i] = weightsFile["Layers"][i]["Biases"].get<vector<double>>();
-            weights[i] = weightsFile["Layers"][i]["Weights"].get<vector<vector<double>>>();
+            biases[i] = weightsFile["Layers"][i]["Biases"].get<vector<float>>();
+            
+            auto weights2D = weightsFile["Layers"][i]["Weights"].get<vector<vector<float>>>();
+            size_t numInputs = weights2D.size();
+            size_t numOutputs = numInputs == 0 ? 0 : weights2D[0].size();
+
+            weights[i].resize(numInputs * numOutputs);
+            for (size_t row = 0; row < numInputs; ++row)
+            {
+                for (size_t col = 0; col < numOutputs; ++col)
+                {
+                    weights[i][row * numOutputs + col] = weights2D[row][col];
+                }
+            }
         }
 
         return {biases, weights};
@@ -52,127 +64,140 @@ namespace Network
     {
 
         public:
-            using ProgressCallback = std::function<void(int currentEpoch, int totalEpochs, int currentBatch, int totalBatch, int trainingSample, int trainingSampleNum, double currentLoss)>;
+            using ProgressCallback = std::function<void(int currentEpoch, int totalEpochs, int currentBatch, int totalBatch, int trainingSample, int trainingSampleNum, float currentLoss)>;
 
             struct Layer
             {
+                size_t numInputs = 0;
+                size_t numOutputs = 0;
+
                 //used for forward passes
-                vector<vector<double>> weights;
-                vector<double> biases;
+                vector<float> weights;
+                vector<float> biases;
 
                 // allows different activation functions to be used
-                function<double(double)> activationFunction;
-                function<double(double)> invActivationFunction;
+                function<float(float)> activationFunction;
+                function<float(float)> invActivationFunction;
 
                 // used in back propagation to calculate gradients
-                vector<double> lastInputs;
-                vector<double> lastSums;
-                vector<double> lastOutputs;
+                vector<float> lastInputs;
+                vector<float> lastSums;
+                vector<float> lastOutputs;
 
                 // used to store gradiens after back propagation for proper use in the batches and epochs
-                vector<vector<double>> weightGradients;
-                vector<double> biasGradients;
+                vector<float> weightGradients;
+                vector<float> biasGradients;
 
                 /// @brief Constructor of the Layer structure. Creates the nodes and weights in the correct size
                 /// @param thisLayer number of nodes in this layer 
                 /// @param nextLayer number of weights in this layer (number of nodes in the next layer)
                 /// @param actvFunc used to store the activation function of each layer. May change to allow different ones in each layer or node later!
                 /// @param invActFunc differential of the activation function
-                Layer(int thisLayer = 0, int nextLayer = 0,
-                    function<double(double)> actvFunc = Softsign,
-                    function<double(double)> invActFunc = InverseSoftsign)
+                Layer(const size_t numInputs = 0, const size_t numOutputs = 0,
+                        const function<float(float)> actvFunc = Softsign,
+                        const function<float(float)> invActFunc = InverseSoftsign)
+                        : numInputs(numInputs), numOutputs(numOutputs), activationFunction(actvFunc), invActivationFunction(invActFunc)
                 {
-                    activationFunction = actvFunc;
-                    invActivationFunction = invActFunc;
+                    biases.resize(numOutputs, 0.0f);
+                    biasGradients.resize(numOutputs, 0.0f);
 
-                    biases.resize(nextLayer, 0.0);
-                    biasGradients.resize(nextLayer, 0.0);
+                    size_t totalWeights = numInputs * numOutputs;
+                    weights.resize(totalWeights);
+                    weightGradients.resize(totalWeights, 0.0f);
 
-                    weights.resize(thisLayer);
-                    weightGradients.resize(thisLayer, vector<double>(nextLayer, 0.0));
-
-                    for (vector<double> &weightFrom : weights)
+                    for (size_t k = 0; k < totalWeights; ++k)
                     {
-                        weightFrom.resize(nextLayer);
-                        for (double &weightTo : weightFrom)
-                        {
-                            weightTo = ((double)rand() / RAND_MAX) * 2.0 - 1.0; // initialize the weights as random doubles
-                        }
+                        weights[k] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
                     }
                 }
 
-                Layer(vector<double> biasValues, vector<vector<double>> weightValues,
-                    function<double(double)> actvFunc = Softsign,
-                    function<double(double)> invActFunc = InverseSoftsign
-                    )
+                /// @brief 
+                /// @param biasValues 
+                /// @param weightValues 
+                /// @param actvFunc 
+                /// @param invActFunc 
+                Layer(const vector<float>& biasValues, const vector<float>& weightValues,
+                        const function<float(float)> actvFunc = Softsign,
+                        const function<float(float)> invActFunc = InverseSoftsign)
+                        : activationFunction(actvFunc), invActivationFunction(invActFunc)
                 {
-                    activationFunction = actvFunc;
-                    invActivationFunction = invActFunc;
-
                     biases = biasValues;
                     weights = weightValues;
 
-                    // Match gradient accumulators to loaded layout
-                    size_t numInputs = weights.size();
-                    size_t numOutputs = weights.empty() ? 0 : weights[0].size();
+                    numOutputs = biases.size();
+                    numInputs = numOutputs == 0 ? 0 : weights.size() / numOutputs;
 
-                    biasGradients.resize(biases.size(), 0.0);
-                    weightGradients.resize(numInputs, vector<double>(numOutputs, 0.0));
+                    biasGradients.resize(numOutputs, 0.0f);
+                    weightGradients.resize(weights.size(), 0.0f);
                 }
 
                 /// @brief Converts the weights and biases into the json structure
                 /// @return 
-                json CreateJsonLayer()
+                json CreateJsonLayer() const
                 {
-                    json jsonLayer = {
+                    vector<vector<float>> weights2D(numInputs, vector<float>(numOutputs));
+                    for (size_t i = 0; i < numInputs; ++i)
+                    {
+                        for (size_t j = 0; j < numOutputs; ++j)
+                        {
+                            weights2D[i][j] = weights[i * numOutputs + j];
+                        }
+                    }
+
+                    return json{
                         {"Biases", biases},
-                        {"Weights", weights}
+                        {"Weights", weights2D}
                     };
-                    return jsonLayer;
                 }
 
                 /// @brief updates the biases to a deired value. Used to load previous models
                 /// @param newBiases 
-                void UpdateBiases(vector<double> newBiases)
+                void UpdateBiases(const vector<float>& newBiases)
                 {
                     biases = newBiases;
-                    biasGradients.assign(biases.size(), 0.0);
+                    numOutputs = biases.size();
+                    biasGradients.assign(numOutputs, 0.0f);
                 }
 
                 /// @brief updates the weights to a deired value. Used to load previous models
                 /// @param newWeights 
-                void UpdateWeights(vector<vector<double>> newWeights)
+                void UpdateWeights(const vector<float>& newWeights)
                 {
                     weights = newWeights;
-                    size_t numInputs = weights.size();
-                    size_t numOutputs = weights.empty() ? 0 : weights[0].size();
-                    weightGradients.assign(numInputs, vector<double>(numOutputs, 0.0));
+                    numInputs = numOutputs == 0 ? 0 : weights.size() / numOutputs;
+                    weightGradients.assign(weights.size(), 0.0f);
                 }
 
                 /// @brief gets the input to each bias in the next layer
                 /// @param inputs the outputs from the last layer
                 /// @return the inputs to the next layer
-                vector<double> ForwardPass(vector<double> &inputs)
+                const vector<float>& ForwardPass(const vector<float>& inputs)
                 {
-                    if (weights.empty() || weights[0].empty()) // if it is the final layer
-                        return inputs;
+                    if (numOutputs == 0) return inputs;
 
-                    lastInputs = inputs; // hold onto for the back propagation
-                    size_t numInputs = weights.size();
-                    size_t numOutputs = weights[0].size();
-
-                    lastSums.assign(numOutputs, 0.0);
-                    lastOutputs.assign(numOutputs, 0.0);
+                    lastInputs = inputs; 
+                    lastSums.assign(numOutputs, 0.0f);
+                    lastOutputs.resize(numOutputs);
 
                     for (size_t j = 0; j < numOutputs; ++j)
                     {
-                        double sum = biases[j];
-                        for (size_t i = 0; i < numInputs; ++i)
+                        lastSums[j] = biases[j];
+                    }
+
+                    for (size_t i = 0; i < numInputs; ++i)
+                    {
+                        float inVal = inputs[i];
+                        size_t rowOffset = i * numOutputs;
+
+                        for (size_t j = 0; j < numOutputs; ++j)
                         {
-                            sum += inputs[i] * weights[i][j]; // function a = ∑(w*a-1) + b
+                            lastSums[j] += inVal * weights[rowOffset + j];
                         }
-                        lastSums[j] = sum; // used in back propagation
-                        lastOutputs[j] = activationFunction(sum); // used in back propagation
+                    }
+
+                    for (size_t j = 0; j < numOutputs; ++j)
+                    {
+                        lastOutputs[j] = activationFunction(lastSums[j]);
                     }
 
                     return lastOutputs;
@@ -181,25 +206,27 @@ namespace Network
                 /// @brief Adds the changes in gradient calculated in the backpropagation
                 /// @param deltas The gradient from the last back propagation
                 /// @return The delta from the layer before
-                vector<double> AccumulateGradients(const vector<double> &deltas)
+                vector<float> AccumulateGradients(const vector<float>& deltas)
                 {
-                    size_t numInputs = weights.size();
-                    size_t numOutputs = weights[0].size();
+                    vector<float> prevDeltas(numInputs, 0.0f);
 
-                    vector<double> prevDeltas(numInputs, 0.0);
-
-                    for (size_t j = 0; j < numOutputs; j++)
+                    for (size_t i = 0; i < numInputs; ++i)
                     {
-                        double deltaJ = deltas[j];
+                        float inputI = lastInputs[i];
+                        size_t rowOffset = i * numOutputs;
 
-                        for (size_t i = 0; i < numInputs; i++)
+                        for (size_t j = 0; j < numOutputs; ++j)
                         {
-                            prevDeltas[i] += weights[i][j] * deltaJ;
+                            float deltaJ = deltas[j];
 
-                            weightGradients[i][j] += lastInputs[i] * deltaJ;
+                            prevDeltas[i] += weights[rowOffset + j] * deltaJ;
+                            weightGradients[rowOffset + j] += inputI * deltaJ;
                         }
+                    }
 
-                        biasGradients[j] += deltaJ;
+                    for (size_t j = 0; j < numOutputs; ++j)
+                    {
+                        biasGradients[j] += deltas[j];
                     }
 
                     return prevDeltas;
@@ -208,23 +235,23 @@ namespace Network
                 /// @brief applies the gradient changes to each weight and bias after an epoch
                 /// @param learningRate rate of change. Should be different for each epoch
                 /// @param currentBatchSize the number items in the epoch (batch size)
-                void ApplyGradients(double learningRate, size_t currentBatchSize)
+                void ApplyGradients(const float learningRate, const size_t currentBatchSize)
                 {
-                    size_t numInputs = weights.size();
-                    size_t numOutputs = weights[0].size();
+                    float invBatch = 1.0f / static_cast<float>(currentBatchSize);
+                    size_t totalWeights = weights.size();
 
-                    for (size_t j = 0; j < numOutputs; j++)
+                    for (size_t k = 0; k < totalWeights; ++k)
                     {
-                        for (size_t i = 0; i < numInputs; i++)
-                        {
-                            double avgGrad = weightGradients[i][j] / currentBatchSize;
-                            weights[i][j] -= learningRate * avgGrad;
-                            weightGradients[i][j] = 0.0;
-                        }
+                        float avgGrad = weightGradients[k] * invBatch;
+                        weights[k] -= learningRate * avgGrad;
+                        weightGradients[k] = 0.0f;
+                    }
 
-                        double avgBiasGrad = biasGradients[j] / currentBatchSize;
+                    for (size_t j = 0; j < numOutputs; ++j)
+                    {
+                        float avgBiasGrad = biasGradients[j] * invBatch;
                         biases[j] -= learningRate * avgBiasGrad;
-                        biasGradients[j] = 0.0;
+                        biasGradients[j] = 0.0f;
                     }
                 }
             };
@@ -233,9 +260,9 @@ namespace Network
             /// @param layerSizes array for the size of each layer. build as { input nodes, hidden nodes 1, ... hidden nodes n, output nodes }
             /// @param actvFunc used to store the activation function of each layer. May change to allow different ones in each layer or node later!
             /// @param invActvFunc the differential of the activation function
-            Network(vector<int> &layerSizes,
-                    function<double(double)> actvFunc = Softsign,
-                    function<double(double)> invActvFunc = InverseSoftsign)
+            Network(const vector<int> &layerSizes,
+                    const function<float(float)> actvFunc = Softsign,
+                    const function<float(float)> invActvFunc = InverseSoftsign)
             {
                 layers.resize(layerSizes.size() - 1);
 
@@ -250,9 +277,9 @@ namespace Network
             /// @param weights vector of each layer's weights
             /// @param actvFunc lambda method to act as the activation function
             /// @param invActvFunc lambda method. Must be d/dx of the activation function
-            Network(vector<vector<double>> biases, vector<vector<vector<double>>> weights,
-                    function<double(double)> actvFunc = Softsign,
-                    function<double(double)> invActvFunc = InverseSoftsign)
+            Network(const vector<vector<float>>& biases, const vector<vector<float>>& weights,
+                    const function<float(float)> actvFunc = Softsign,
+                    const function<float(float)> invActvFunc = InverseSoftsign)
             {
                 if (biases.size() != weights.size())
                 {
@@ -272,45 +299,57 @@ namespace Network
 
             /// @brief shows the shape of the network on a way that can be displayed in the console
             /// @return A string of the network showing its current biases as the nodes, and the weights as the connection between them
-            string VisualNetwork()
+            string VisualNetwork() const
             {
-                string output = "";
-                for (size_t i = 0; i < layers.size(); i++)
+                std::ostringstream output;
+
+                for (size_t i = 0; i < layers.size(); ++i)
                 {
-                    for (size_t j = 0; j < layers[i].weights.size(); j++)
+                    const auto& layer = layers[i];
+                    
+                    for (size_t inIdx = 0; inIdx < layer.numInputs; ++inIdx)
                     {
-                        for (size_t k = 0; k < layers[i].weights[j].size(); k++)
+                        size_t rowOffset = inIdx * layer.numOutputs;
+                        
+                        for (size_t outIdx = 0; outIdx < layer.numOutputs; ++outIdx)
                         {
-                            output += to_string(layers[i].weights[j][k]) + " ";
+                            output << layer.weights[rowOffset + outIdx] << " ";
                         }
-                        output += j != layers[i].weights.size() - 1 ? "| " : "";
+
+                        if (inIdx != layer.numInputs - 1)
+                        {
+                            output << "| ";
+                        }
                     }
-                    output += "\n";
-                    for (size_t j = 0; j < layers[i].biases.size(); j++)
+                    output << "\n";
+
+                    for (size_t outIdx = 0; outIdx < layer.numOutputs; ++outIdx)
                     {
-                        output += to_string(layers[i].biases[j]) + " ";
+                        output << layer.biases[outIdx] << " ";
                     }
-                    output += "\n";
+                    output << "\n";
                 }
 
-                return output;
+                return output.str();
             }
 
             /// @brief runs through the network to get the final output
             /// @param inputs an array of the inputs to the first layer of the network
             /// @return An array of the output nodes
-            vector<double> ForwardPass(vector<double> inputs)
+            const vector<float>& ForwardPass(const vector<float>& inputs)
             {
-                if (inputs.size() != layers[0].weights.size())
+                if (layers.empty() || inputs.size() != layers[0].numInputs)
                 {
                     throw invalid_argument("Input size mismatch with network input layer.");
                 }
 
+                const vector<float>* currentInputs = &inputs;
                 for (size_t i = 0; i < layers.size(); ++i)
                 {
-                    inputs = layers[i].ForwardPass(inputs); // calculates each layer and outputs the array from the other side
+                    // Now works safely because ForwardPass returns a const reference
+                    currentInputs = &layers[i].ForwardPass(*currentInputs);
                 }
-                return inputs;
+                return *currentInputs;
             }
 
             /// @brief Trains the neural network using back propagation and gradient descent
@@ -318,21 +357,21 @@ namespace Network
             /// @param epochs number of times it should be trained
             /// @param batchSize number of times the training should take place in each epoch
             /// @param learningRate the rate of change for each epoch
-            void Train(const vector<pair<vector<double>, vector<double>>> &trainingData, 
-                    int epochs, 
-                    size_t batchSize, 
-                    double learningRate,
-                    ProgressCallback onProgress = nullptr)
+            void Train(const vector<pair<vector<float>, vector<float>>> &trainingData, 
+                    int epochs, size_t batchSize, float learningRate, ProgressCallback onProgress = nullptr)
             {
                 size_t numSamples = trainingData.size();
+                if (numSamples == 0 || batchSize == 0) return;
+
+                float currentLearningRate = learningRate;
+                float decayFactor = 0.95f;
+                int totalBatches = static_cast<int>((numSamples + batchSize - 1) / batchSize);
 
                 for (int epoch = 0; epoch < epochs; ++epoch)
                 {
-                    double totalEpochLoss = 0.0;
+                    float totalEpochLoss = 0.0f;
                     size_t processedSamples = 0;
 
-                    double learnRateTemp = learningRate;
-                    double decayFactor = 0.95;
                     for (size_t i = 0; i < numSamples; i += batchSize)
                     {
                         size_t currentBatchSize = 0;
@@ -340,33 +379,39 @@ namespace Network
                         for (size_t b = 0; b < batchSize && (i + b) < numSamples; b++)
                         {
                             size_t sampleIdx = i + b;
+                            const auto& sampleItems = trainingData[sampleIdx];
 
-                            pair<vector<double>, vector<double>> sampleItems = trainingData[sampleIdx];
-                            auto output = ForwardPass(sampleItems.first);
+                            const auto& output = ForwardPass(sampleItems.first);
                             BackPropagation(sampleItems.second);
 
-                            double sampleLoss = 0.0;
+                            float sampleLoss = 0.0f;
                             for (size_t k = 0; k < output.size(); ++k)
                             {
-                                double diff = sampleItems.second[k] - output[k];
+                                float diff = sampleItems.second[k] - output[k];
                                 sampleLoss += diff * diff;
                             }
-                            totalEpochLoss += (0.5 * sampleLoss);
+                            totalEpochLoss += (0.5f * sampleLoss);
 
                             currentBatchSize++;
                             processedSamples++;
-                            if (onProgress)
-                            {
-                                onProgress(epoch + 1, epochs, i / batchSize + 1, (numSamples + batchSize - 1) / batchSize, i + b + 1, trainingData.size(), totalEpochLoss / processedSamples);
-                            }
                         }
-                        ApplyBatch(learnRateTemp, currentBatchSize);
-                        learnRateTemp *= decayFactor;
+
+                        ApplyBatch(currentLearningRate, currentBatchSize);
+
+                        if (onProgress)
+                        {
+                            int currentBatch = static_cast<int>(i / batchSize) + 1;
+                            float averageLoss = totalEpochLoss / processedSamples;
+                            onProgress(epoch + 1, epochs, currentBatch, totalBatches, static_cast<int>(processedSamples), static_cast<int>(numSamples), averageLoss);
+                        }
                     }
+
+                    // Decay rate updated strictly once per epoch
+                    currentLearningRate *= decayFactor;
                 }
             }
 
-            json CreateJsonFile()
+            json CreateJsonFile() const
             {
                 size_t layersSize = layers.size();
                 vector<json> jsonLayers(layersSize);
@@ -385,27 +430,28 @@ namespace Network
         
             /// @brief starts the learning process 'back propagation'. Gets the output from forward pass and the real, ideal output and calculates the gradient descent at each layer
             /// @param idealOutput the desired output for this specific input
-            void BackPropagation(const vector<double> &idealOutput)
+            void BackPropagation(const vector<float> &idealOutput)
             {
                 const auto &finalOutputs = layers.back().lastOutputs;
                 const auto &finalSums = layers.back().lastSums;
 
-                vector<double> deltas(finalOutputs.size());
+                vector<float> deltas(finalOutputs.size());
                 for (size_t j = 0; j < finalOutputs.size(); j++)
                 {
-                    double error = finalOutputs[j] - idealOutput[j];
+                    float error = finalOutputs[j] - idealOutput[j];
                     deltas[j] = error * layers.back().invActivationFunction(finalSums[j]);
                 }
 
-                for (int i = layers.size() - 1; i >= 0; i--)
+                for (int i = static_cast<int>(layers.size()) - 1; i >= 0; i--)
                 {
                     deltas = layers[i].AccumulateGradients(deltas);
 
                     if (i > 0)
                     {
+                        const auto &prevSums = layers[i - 1].lastSums;
                         for (size_t k = 0; k < deltas.size(); k++)
                         {
-                            deltas[k] *= layers[i - 1].invActivationFunction(layers[i - 1].lastSums[k]);
+                            deltas[k] *= layers[i - 1].invActivationFunction(prevSums[k]);
                         }
                     }
                 }
@@ -414,7 +460,7 @@ namespace Network
             /// @brief Changes the weights and biases for each layer
             /// @param learningRate rate of change to apply
             /// @param batchSize number of test idems in the batch
-            void ApplyBatch(double learningRate, size_t batchSize)
+            void ApplyBatch(const float learningRate, size_t batchSize)
             {
                 for (auto &layer : layers)
                 {
