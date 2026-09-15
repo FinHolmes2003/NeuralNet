@@ -240,9 +240,9 @@ class MyFrame : public wxFrame
                 inputFile >> loadedFile;
                 inputFile.close();
 
-                auto [biases, weights] = Network::JsonToVectors(loadedFile);
+                auto [biases, weights, activeFuncs] = Network::JsonToVectors(loadedFile);
 
-                neuralNet = Network::Network(biases, weights);
+                neuralNet = Network::Network(biases, weights, activeFuncs);
 
                 SetStatusText("Successfully loaded weights and biases.");
             }
@@ -264,7 +264,7 @@ class MyFrame : public wxFrame
 
             int epochs = 5;
             size_t batchSize = 120;
-            float learningRate = 5.0;
+            float learningRate = 0.001;
 
             neuralNet.Train(testData, epochs, batchSize, learningRate, 
                 [this](int currentEpoch, int totalEpochs, int currentBatch, int totalBatches, int trainingSample, int trainingSampleTotal, float loss) 
@@ -272,7 +272,8 @@ class MyFrame : public wxFrame
                     SetStatusText(wxString::Format("Training... Epoch %d / %d | Batch %d / %d | Image %d / %d | Loss: %.2f", 
                                                 currentEpoch, totalEpochs, currentBatch, totalBatches, trainingSample, trainingSampleTotal , loss));
                     wxYield();
-                }
+                },
+                Network::OptimizerType::AdamW
             );
 
             SetStatusText("Training complete!");
@@ -324,7 +325,8 @@ class MyApp : public wxApp
         bool OnInit() override
         {
             std::vector<int> layerSizes{28*28, 100, 100, 10};
-            Network::Network neuralNet(layerSizes);
+            std::vector<Network::ActivationType> activationFunctions{ Network::ActivationType::ReLU, Network::ActivationType::ReLU, Network::ActivationType::Softsign };
+            Network::Network neuralNet(layerSizes, activationFunctions);
 
             wxInitAllImageHandlers();
             MyFrame *frame = new MyFrame(neuralNet);

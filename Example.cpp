@@ -19,8 +19,8 @@ int main()
     {
         inputFile >> loadedFile;
         inputFile.close();
-        auto [biases, weights] = Network::JsonToVectors(loadedFile);
-        neuralnet = Network::Network(biases, weights); // create the network with the saved weights
+        auto [biases, weights, activFuncs] = Network::JsonToVectors(loadedFile);
+        neuralnet = Network::Network(biases, weights, activFuncs); // create the network with the saved weights
     }
     else
     {
